@@ -1,0 +1,31 @@
+@startuml
+start
+
+:Initialize RNG & Parameters;
+
+:Generate Base Height Map;
+note right: Use noise (Perlin, Simplex) to define terrain contours
+
+:Assign Terrain Tiles;
+note right: Determine tile types (dirt, stone, etc.) based on height thresholds
+
+:Carve Caves & Overhangs;
+note right: Use noise or cellular automata to dig tunnels and caverns
+
+:Place Ores & Special Materials;
+note right: Insert ore veins, resource clusters within stone/dirt layers
+
+:Generate Biomes & Sub-Regions;
+note right: Define desert, snow, jungle, etc. and adjust tile types accordingly
+
+:Decorate Terrain Surface;
+note right: Add trees, grass, shrubs, flowers, and surface details
+
+:Place Structures & Points of Interest;
+note right: Generate ruins, chests, NPC houses, or other landmarks
+
+:Final Passes;
+note right: Calculate lighting, smooth edges, perform final adjustments
+
+stop
+@enduml
