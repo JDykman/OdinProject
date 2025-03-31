@@ -23,9 +23,6 @@ default_context: runtime.Context
 
 Globals :: struct {
     world_size: Vec2f,
-    cameraPosition: Vec2f,
-    cameraRotation: f32,
-    camera: Camera2D,
 }
 g := new(Globals)
 
@@ -168,7 +165,7 @@ Sprite_Name :: enum {
 }
 
 player: Player = Player{
-    position = {0, 0},
+    position = {f32(GAME_WIDTH/2), f32(GAME_HEIGHT/2)}, // Center of screen
     sprite = SPRITES[.PINK_MONSTER],
     color = {255, 255, 255, 1},
     scale = {1, 1},
@@ -198,6 +195,20 @@ Block :: struct {
     Temperature:  f32,   // For thermal effects (melting, burning, etc.)
     Flags:        int,   // Bitmask for extra properties (flammable, liquid, etc.)
 }
+
+Camera :: struct {
+    position: Vec2f,  // Camera position in world space
+    target: ^Player,  // Optional target to follow (can be nil)
+    bounds: struct {  // Optional camera bounds
+        min_x, min_y: f32,
+        max_x, max_y: f32,
+    },
+    smoothing: f32,   // Camera movement smoothing factor (0-1)
+    zoom: f32,        // Future expansion: camera zoom
+}
+
+// Global camera instance
+camera: Camera
 
 // Block type constants.
 BLOCK_AIR : Block = {
@@ -245,7 +256,7 @@ FLAG_IS_LIQUID    := 1 << 1
 
 BLOCK_SIZE :: 16 // Block size (in pixels)
 WORLD_WIDTH  :: 50 // Width of the world (in pixels)
-WORLD_HEIGHT :: 10 // Height of the world (in pixels)
+WORLD_HEIGHT :: 23  // At least as tall as game view (22.5 tiles)
 
 World :: struct {
     width: int, // Width in blocks
@@ -276,193 +287,16 @@ easeOutSine :: proc(x: f32) -> f32{
     return math.sin_f32((x * math.PI) / 2)
 }
 
-// A simple 2D camera structure
-Camera2D :: struct {
-    proj: Mat4, // Projection matrix
-    view: Mat4, // View matrix
-    mvp:  Mat4, // Combined Model-View-Projection matrix
-}
 
-// Creates an orthographic camera for a given window size.
-// Here we assume (0,0) is top-left, y increases downward.
-CreateOrthoCamera :: proc(window_width, window_height: f32) -> Camera2D {
-    camera: Camera2D;
-    // Ortho with left=0, right=window_width, top=0, bottom=window_height, near=-1, far=1
-    camera.proj = Ortho(0.0, window_width, window_height, 0.0, -1.0, 1.0);
-    camera.view = IdentityMat4(); // No translation or rotation
-    camera.mvp  = MultiplyMat4(camera.proj, camera.view);
-    return camera;
-}
-
-// Constructs an orthographic projection matrix.
-Ortho :: proc(left, right, bottom, top, near, far: f32) -> Mat4 {
-    return Mat4{
-        2.0 / (right - left),    0.0,                   0.0,                   0.0,
-        0.0,                     2.0 / (top - bottom),  0.0,                   0.0,
-        0.0,                     0.0,                  -2.0 / (far - near),    0.0,
-        -(right + left) / (right - left),
-        -(top + bottom) / (top - bottom),
-        -(far + near) / (far - near),
-        1.0,
-    };
-}
-
-CameraMoveData :: struct {
-    from, to: Vec2f,
-    duration: f32,
-    elapsed: f32,
-    easing: proc(f32) -> f32,
-    camera_position: ^Vec2f,
-}
-
-update_camera_move :: proc(coroutine: ^Coroutine) -> bool {
-    data := cast(^CameraMoveData) coroutine.data
-    data.elapsed += get_frame_delta_time()
-    
-    t := data.elapsed / data.duration
-    if t >= 1.0 {
-        t = 1.0
-    }
-
-    eased_t := data.easing(t)
-    data.camera_position^.x = lerp(data.from.x, data.to.x, eased_t)
-    data.camera_position^.y = lerp(data.from.y, data.to.y, eased_t)
-
-    return data.elapsed < data.duration
-}
-
-// Helper to easily start a camera coroutine
-move_camera :: proc(
-    from, to: Vec2f, 
-    duration: f32, 
-    easing: proc(f32) -> f32, 
-    camera_position: ^Vec2f,
-) {
-    data := new(CameraMoveData)
-    data.from = from
-    data.to = to
-    data.duration = duration
-    data.elapsed = 0.0
-    data.easing = easing
-    data.camera_position = camera_position
-    
-    add_coroutine(update_camera_move, data)
-}
-
-UpdateOrtho :: proc() {
-    g.camera.proj = Ortho(
-        -f32(GAME_WIDTH)/2, f32(GAME_WIDTH)/2,
-        -f32(GAME_HEIGHT)/2, f32(GAME_HEIGHT)/2,
-        -1.0, 1.0
-    )
-    g.camera.mvp = MultiplyMat4(g.camera.proj, g.camera.view)
-}
-
-UpdateCameraView :: proc(){
-    g.camera.view = TranslateMat4(Vec2f{g.cameraPosition.x, g.cameraPosition.y})
-    g.camera.mvp = MultiplyMat4(g.camera.proj, g.camera.view)
-}
-
-cameraDeltaToWorld :: proc(delta: Vec2f) -> Vec2f {
-    return Vec2f{
-        delta.x * f32(GAME_WIDTH),
-        delta.y * f32(GAME_HEIGHT),
-    }
-}
-
-worldToCamera :: proc(worldPos: Vec2f) -> Vec2f {
-    return Vec2f{
-        worldPos.x / f32(GAME_WIDTH),
-        worldPos.y / f32(GAME_HEIGHT),
-    }
-}
-
-
-// Helper linear interpolation function
-lerp :: proc(a, b, t: f32) -> f32 {
-    return a + (b - a) * t
-}
-
-get_frame_delta_time :: proc() -> f32 {
-    return f32(sapp.frame_duration())
-}
-
-
-// Returns an identity 4x4 matrix.
-IdentityMat4 :: proc() -> Mat4 {
-    return Mat4{
-        1.0, 0.0, 0.0, 0.0,
-        0.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0,
-        0.0, 0.0, 0.0, 1.0,
-    };
-}
-
-// Multiplies two 4x4 matrices (a * b).
-MultiplyMat4 :: proc(a, b: Mat4) -> Mat4 {
-    result: Mat4;
-    // Use half-open ranges: 0..<4
-    for i in 0..<4 {
-        for j in 0..<4 {
-            sum: f32 = 0.0;
-            for k in 0..<4 {
-                sum += a[i*4 + k] * b[k*4 + j];
-            }
-            result[i*4 + j] = sum;
-        }
-    }
-    return result;
-}
 FlipPlayer :: proc(p : ^Player) {
     p.scale = {-p.scale.x, p.scale.y}
 }
 
-
-TranslateMat4 :: proc(translation: Vec2f) -> Mat4 {
-    // Create an identity matrix first:
-    t: Mat4 = IdentityMat4();
-    t[12] = -translation.x; // x translation
-    t[13] = -translation.y; // y translation
-    return t;
-}
-
-initWorld :: proc(w, h :int) -> World {
-    // Create Empty World
-    grid := make([][]Block, w)
-    for i in 0..<w {
-        grid[i] = make([]Block, h)
-        for j in 0..<h {
-            grid[i][j] = BLOCK_AIR
-            fmt.printf("Block: %d %d\n", i, j)
-        }
-    }
-
-    return World{
-        width = w,
-        height = h,
-        seed = WORLD_SEED,
-        noiseFreq = WORLD_NOISE_FREQ,
-        worldGrid = grid,
-    }
-}
-
-generateWorld :: proc(world: ^World) {
-    
-}
-
-renderWorld :: proc(world: ^World) {
-    
-}
 // Initialize the Sokol application
 init_cb :: proc "c" () {
     context = default_context
 
-    // append(&sprites_to_render, Sprite_To_Render{
-    //     position = {29 * 0 + 8, 120},
-    //     sprite   = SPRITES[.PINK_MONSTER],
-    //     color    = {255, 255, 255, 1},
-    //     scale    = {1, 1},
-    // })
+    player.position = {WORLD_WIDTH * BLOCK_SIZE / 2, WORLD_HEIGHT * BLOCK_SIZE / 2} // Place player at center of world
 
     sg.setup({
 		environment = shelpers.glue_environment(),
@@ -475,361 +309,86 @@ init_cb :: proc "c" () {
 
     assert(GAME_WIDTH > 0, fmt.tprintf("game_width > 0: %v", GAME_WIDTH))
     assert(GAME_HEIGHT > 0, fmt.tprintf("game_height > 0: %v", GAME_HEIGHT))
-    // This is a multiplier to translate our GAME coordinates to viewport coordinates
-    pixel_to_viewport_multiplier := gfx_get_pixel_to_viewport_multiplier(
-        GAME_WIDTH,
-        GAME_HEIGHT,
-    )
 
-    // Set the camera's center to (0,0) on start.
-    g.cameraPosition = Vec2f{0, 0}
+    init_renderer(GAME_WIDTH, GAME_HEIGHT)
+    fmt.println("Sprite atlas initialized with size:", renderer.offscreen.sprite_atlas_size)
 
-
-    OFFSCREEN_PIXEL_FORMAT :: sg.Pixel_Format.RGBA8
-    OFFSCREEN_SAMPLE_COUNT :: 1
-
-    ////////////////////////////////////////////////////////////////////////////
-    // `render_target` is a color attachment in the offscreen rendering pass.
-    // But also a fragement shader texture in the display rendering pass.
-    // Everything that is rendered in our GAME is rendered to this image.
-    image_description := sg.Image_Desc {
-        render_target = true,
-        width         = i32(GAME_WIDTH),
-        height        = i32(GAME_HEIGHT),
-        pixel_format  = OFFSCREEN_PIXEL_FORMAT,
-        sample_count  = OFFSCREEN_SAMPLE_COUNT,
-        label         = "color-image-render-target",
-    }
-    render_target := sg.make_image(image_description)
-
-    // Depth stencil for alpha blending, so we can have transparent sprites.
-    image_description.pixel_format = .DEPTH
-    image_description.label = "depth-image-render-target"
-    depth_image := sg.make_image(image_description)
-
-    // Attach the render target to our offscreen pass.
-    offscreen_pass := sg.Pass {
-        attachments = sg.make_attachments(
-            {
-                colors = {0 = {image = render_target}},
-                depth_stencil = {image = depth_image},
-                label = "offscreen-attachments",
-            },
-        ),
-        action = {
-            colors = {
-                0 = {
-                    load_action = .CLEAR,
-                    clear_value = sg.Color{0.2, 0.2, 0.2, 1},
-                },
-            },
+    // Initialize camera
+    camera = Camera{
+        position = {GAME_WIDTH/2, GAME_HEIGHT/2},  // Start at center of game
+        target = &player,                          // Follow the player
+        bounds = {
+            min_x = 0, min_y = 0,
+            // Apply max function directly in the initialization
+            max_x = max(0, WORLD_WIDTH * BLOCK_SIZE - GAME_WIDTH),
+            max_y = max(0, WORLD_HEIGHT * BLOCK_SIZE - GAME_HEIGHT),
         },
-        label = "offscreen-pass",
+        smoothing = 0.1,   // Slight smoothing for nice feel (0=instant, 1=no movement)
+        zoom = 1.0,        // Default zoom level
     }
 
-    // Single quad reused by all our sprites.
-    // odinfmt: disable
-    // The `offscreen_index_buffer_vertices` will map the values
-    // `0, 1, 3` and `1, 2, 3` to these coordinates.
-    offscreen_vertex_buffer_vertices := [8]f32{
-        1, 1, // [0]
-        1, 0, // [1]
-        0, 0, // [2]
-        0, 1, // [3]
+    // Ensure viewport multiplier is initialized properly
+    renderer.offscreen.pixel_to_viewport_multiplier = 
+        gfx_get_pixel_to_viewport_multiplier(GAME_WIDTH, GAME_HEIGHT)
+
+    frame_cb() // Force a frame update to apply initial camera position
+}
+update_camera :: proc() {
+    // If we have a target, camera follows it
+    if camera.target != nil {
+        // Calculate desired position (center the target)
+        target_x := camera.target.position[0] - GAME_WIDTH/2
+        target_y := camera.target.position[1] - GAME_HEIGHT/2
+        
+        // Apply smoothing
+        if camera.smoothing > 0 {
+            camera.position.x = math.lerp(camera.position.x, target_x, 1 - camera.smoothing)
+            camera.position.y = math.lerp(camera.position.y, target_y, 1 - camera.smoothing)
+        } else {
+            camera.position.x = target_x
+            camera.position.y = target_y
+        }
     }
-    // Two triangles creates a quad
-    // [2] {0, 0}    [1] {1, 0}
-    //  \            /
-    //   x----------x
-    //   |         /|
-    //   |  2    /  |
-    //   |     /    |
-    //   |   /   1  |
-    //   | /        |
-    //   x__________x
-    //  /            \
-    // [3] {0, 1}   [0] {1, 1}
-    offscreen_index_buffer_vertices := [6]u16{
-        0, 1, 3, // triangle 1
-        1, 2, 3, // triangle 2
-    }
-    // odinfmt: enable
-
-    offscreen_vertex_buffer := sg.make_buffer(
-        {
-            type = .VERTEXBUFFER,
-            data = as_range(&offscreen_vertex_buffer_vertices),
-            label = "offscreen-vertex-buffer",
-        },
-    )
-
-    offscreen_index_buffer := sg.make_buffer(
-        {
-            type = .INDEXBUFFER,
-            data = as_range(&offscreen_index_buffer_vertices),
-            label = "offscreen-index-buffer",
-        },
-    )
-
-    // Another vertex buffer, instanced for all data for each sprite.
-    // see `usage = .STREAM`
-    // This buffer will contain the actual position, color, size etc.
-    // We will put a bunch of `Sprite_Instance`s in this each frame.
-    offscreen_instance_buffer := sg.make_buffer(
-        {
-            usage = .STREAM,
-            type = .VERTEXBUFFER,
-            size = BUDGET_SPRITES * size_of(Sprite_Instance),
-            label = "offscreen-instance-buffer",
-        },
-    )
-
-    // Offscreen pipeline
-    offscreen_pipeline := sg.make_pipeline(
-        {
-            layout = {
-                buffers = {1 = {step_func = .PER_INSTANCE}},
-                attrs = {
-                    // Our quad vertex buffer, index 0
-                    shaders.ATTR_offscreen_vertex_position = {
-                        format = .FLOAT2,
-                        buffer_index = 0,
-                    },
-                    // All these other values are tied to our instance buffer
-                    // Notice how each `format =` lines up with our `Sprite_Instance` struct
-                    shaders.ATTR_offscreen_location = {
-                        format = .FLOAT2,
-                        buffer_index = 1,
-                    },
-                    shaders.ATTR_offscreen_size = {
-                        format = .FLOAT2,
-                        buffer_index = 1,
-                    },
-                    shaders.ATTR_offscreen_position = {
-                        format = .FLOAT2,
-                        buffer_index = 1,
-                    },
-                    shaders.ATTR_offscreen_scale = {
-                        format = .FLOAT2,
-                        buffer_index = 1,
-                    },
-                    shaders.ATTR_offscreen_color = {
-                        format = .FLOAT4,
-                        buffer_index = 1,
-                    },
-                },
-            },
-            index_type = .UINT16,
-            // Load the shader!
-            shader = sg.make_shader(
-                shaders.offscreen_shader_desc(sg.query_backend()),
-            ),
-            depth = {
-                pixel_format = .DEPTH,
-                compare = .LESS_EQUAL,
-                write_enabled = true,
-            },
-            colors = {
-                0 = {
-                    // This is what enables our sprites to be transparent.
-                    // This is also what decides _how_ the are ordered.
-                    // https://learnopengl.com/Advanced-OpenGL/Blending
-                    blend = {
-                        enabled = true,
-                        src_factor_rgb = .SRC_ALPHA,
-                        dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
-                        op_rgb = .ADD,
-                        src_factor_alpha = .SRC_ALPHA,
-                        dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
-                        op_alpha = .ADD,
-                    },
-                    pixel_format = OFFSCREEN_PIXEL_FORMAT,
-                },
-            },
-            color_count = 1,
-            sample_count = OFFSCREEN_SAMPLE_COUNT,
-            label = "offscreen-pipeline",
-        },
-    )
-
-    offscreen_sampler := sg.make_sampler(
-        {
-            min_filter = .NEAREST,
-            mag_filter = .NEAREST,
-            label = "offscreen-sampler",
-        },
-    )
-
-    // Load and create our sprite atlas texture using `stb_image`
-    // `#load` embeds the image in our binary!
-    // This allows us to ship a single .exe without any assets laying around.
-    // https://odin-lang.org/docs/overview/#loadstring-path-or-loadstring-path-type
-    asset_sprite_atlas := #load("assets/textures.png")
-    sa_w, sa_h, channels: i32
-    stbi.set_flip_vertically_on_load(1)
-    sprite_atlas := stbi.load_from_memory(
-        raw_data(asset_sprite_atlas),
-        i32(len(asset_sprite_atlas)),
-        &sa_w,
-        &sa_h,
-        &channels,
-        4,
-    )
-    // free the loaded image at the end of init.
-    // `sg.make_image` will do the allocation needed and return a handle
-    // after this we don't need the stbi_loaded image.
-    // In general all `sg.make_` function do an allocation and return a handle!
-    // https://github.com/floooh/sokol/blob/master/sokol_gfx.h#L1320
-    // These are (I think lol) the only allocation that are done in this code.
-    // https://odin-lang.org/docs/overview/#defer-statement
-    defer stbi.image_free(sprite_atlas)
-
-    // Create the image (in the sokol sense), this will be our texture in the shader.
-    sprite_atlas_image := sg.make_image(
-        {
-            width = sa_w,
-            height = sa_h,
-            data = {
-                subimage = {
-                    0 = {
-                        0 = {
-                            ptr = sprite_atlas,
-                            size = c.size_t(sa_w * sa_h * 4),
-                        },
-                    },
-                },
-            },
-            pixel_format = OFFSCREEN_PIXEL_FORMAT,
-            label = "sprite-atlas",
-        },
-    )
-
-    // Here we set the buffers, sampler and image.
-    // To get the image into the shader we need:
-    // - A texture - our image!
-    // - A sampler
-    offscreen_bindings := sg.Bindings {
-        vertex_buffers = {
-            0 = offscreen_vertex_buffer,
-            1 = offscreen_instance_buffer,
-        },
-        index_buffer = offscreen_index_buffer,
-        samplers = {shaders.SMP_smp = offscreen_sampler},
-        images = {shaders.IMG_tex = sprite_atlas_image},
-    }
-
-    ////////////////////////////////////////////////////////////////////////////
-
-    // Store all the things we need in our global struct.
-    renderer.offscreen = {
-        pixel_to_viewport_multiplier = pixel_to_viewport_multiplier,
-        sprite_atlas_size            = {sa_w, sa_h},
-        pass                         = offscreen_pass,
-        pipeline                     = offscreen_pipeline,
-        bindings                     = offscreen_bindings,
-    }
-
-    ////////////////////////////////////////////////////////////////////////////
-    // Display renderer
-    // The display renderer is simpler.
-    // The only thing this does is to render our image from the offscreen pass.
-    // This image is then scaled up to match our viewport size.
-
-    display_pass_action: sg.Pass_Action
-    display_pass_action.colors[0] = {
-        load_action = .CLEAR,
-        clear_value = {r = 0, g = 0, b = 0, a = 0},
-    }
-
-    // The same rules with the two quads as in the offscreen pass applies here too.
-    // The only difference is that the viewport coordinate space is
-    // {-1, 1} instead of {0, 1}
-    // Hence we pass two values:
-    // The first is the viewport coordinates
-    // The second is the quad from before (offscreen pass) coordinates.
-    // Honestly I am not even sure if the name `uv` is correct here.
-    // The following code is kinda the same as the Offscreen renderer with one big difference:
-    // in the `display_bindings` we set the `image` to the `render_target`!
-    // odinfmt: disable
-    quad_vertices := [16]f32 {
-        // position   uv
-        +1, +1,       1, 1,
-        +1, -1,       1, 0,
-        -1, -1,       0, 0,
-        -1, +1,       0, 1,
-    }
-    // odinfmt: enable
-    display_vertex_buffer := sg.make_buffer(
-        {
-            type = .VERTEXBUFFER,
-            data = as_range(&quad_vertices),
-            label = "display-vertex-buffer",
-        },
-    )
-
-    display_index_buffer_vertex := [QUAD_INDEX_SIZE]u16{0, 1, 3, 1, 2, 3}
-    display_index_buffer := sg.make_buffer(
-        {
-            type = .INDEXBUFFER,
-            data = as_range(&display_index_buffer_vertex),
-            label = "display-index-buffer",
-        },
-    )
-
-    display_pipeline := sg.make_pipeline(
-        {
-            layout = {
-                attrs = {
-                    shaders.ATTR_display_vertex_position = {format = .FLOAT2},
-                    shaders.ATTR_display_vertex_uv = {format = .FLOAT2},
-                },
-            },
-            index_type = .UINT16,
-            shader = sg.make_shader(
-                shaders.display_shader_desc(sg.query_backend()),
-            ),
-            depth = {compare = .LESS_EQUAL, write_enabled = true},
-            label = "display-pipeline",
-        },
-    )
-
-    display_sampler := sg.make_sampler(
-        {
-            min_filter = .NEAREST,
-            mag_filter = .NEAREST,
-            label = "display-sampler",
-        },
-    )
-
-    display_bindings := sg.Bindings {
-        vertex_buffers = {0 = display_vertex_buffer},
-        index_buffer = display_index_buffer,
-        samplers = {shaders.IMG_tex = display_sampler},
-        // Notice how the refer to the `render_target` here!
-        // This is the thing we rendered everything to in the offscreen pass.
-        images = {shaders.SMP_smp = render_target},
-    }
-
-    ////////////////////////////////////////////////////////////////////////////
-
-    // Store all the things we need in our global struct.
-    renderer.display = {
-        pass_action = display_pass_action,
-        pipeline    = display_pipeline,
-        bindings    = display_bindings,
+    
+    // Apply bounds constraints
+    camera.position.x = math.clamp(camera.position.x, camera.bounds.min_x, camera.bounds.max_x)
+    camera.position.y = math.clamp(camera.position.y, camera.bounds.min_y, camera.bounds.max_y)
+}
+world_to_screen :: proc(world_pos: [2]f32) -> [2]f32 {
+    screen_x := world_pos[0] - camera.position.x
+    screen_y := world_pos[1] - camera.position.y
+    return {screen_x, screen_y}
+}
+draw_world_sprite :: proc(
+    world_pos: [2]f32, 
+    sprite: Sprite,
+    scale := Scale{1,1}, 
+    color := Color{255, 255, 255, 1}
+) {
+    screen_pos := world_to_screen(world_pos)
+    
+    // Only draw if on screen (basic culling)
+    // Cast sprite size from u16 to f32 to match screen_pos type
+    if screen_pos[0] > -f32(sprite.size[0]) && screen_pos[0] < GAME_WIDTH &&
+       screen_pos[1] > -f32(sprite.size[1]) && screen_pos[1] < GAME_HEIGHT {
+        append(&sprites_to_render, Sprite_To_Render{
+            position = screen_pos,
+            sprite   = sprite,
+            scale    = scale,
+            color    = color,
+        })
     }
 }
-
 // Frame update function
 frame_cb :: proc "c" () {
     context = runtime.default_context()
 
     ////////////////////////////////////////////////////////////////////////////
     // Timers & Input
-    // see `non_renderer_code.odin`
     update_coroutines()
     tick()
     handle_input()
+    update_camera()
 
     // Setup resolution scale depending on current display size
     dpi_scale := sapp.dpi_scale()
@@ -840,137 +399,34 @@ frame_cb :: proc "c" () {
         display_height,
         dpi_scale,
     )
-
-    ////////////////////////////////////////////////////////////////////////////
-    // Update Camera Projection (orthographic, correct)
-    UpdateCameraView()
-    ////////////////////////////////////////////////////////////////////////////
-    ////////////////////////////////////////////////////////////////////////////
-    // Sprite batch
-    // A "sprite batch" is a big slice of `Sprite_Instance`s which we send to
-    // our vertex buffer with index 1 (offscreen_instance_buffer).
-    // This way we can send ALL sprites to the shaders at once.
-    // This allows to draw several sprites with only one draw call.
-    // People told me draw calls can be a bottleneck in rendering so only doing
-    // one sounds good!
-
-    // Don't forget to reset the batch every frame!
-    renderer.sprite_batch.len = 0
-
-    // A little helper to animate our sprites with the `frames` we defined.
-    for &sprite, idx in sprites_to_render {
-        frames := len(sprite.sprite.frames)
-        location := sprite.sprite.frames[int(timer.animation) % frames]
-
-        // This is where the sprite is added to the batch, navigate to this function.
-        // On could easily do this manually.
-        gfx_draw_sprite(
-            position = {sprite.position.x, sprite.position.y},
-            scale = sprite.scale,
-            color = sprite.color,
-            location = location,
-            size = sprite.sprite.size,
-            sprite_batch = &renderer.sprite_batch,
-        )
+    clear(&sprites_to_render)
+    
+    // Append the player sprite instead of a separate draw call.
+    screen_pos := world_to_screen(player.position)
+    append(&sprites_to_render, Sprite_To_Render{
+        position = screen_pos,
+        color    = player.color,
+        scale    = player.scale,
+        sprite   = player.sprite,
+    })
+    
+    // Add test sprites at fixed world positions
+    for x := 0; x < WORLD_WIDTH; x += 5 {
+        for y := 0; y < WORLD_HEIGHT; y += 5 {
+            world_pos := [2]f32{f32(x * BLOCK_SIZE), f32(y * BLOCK_SIZE)}
+            draw_world_sprite(world_pos, SPRITES[.DIRT])
+        }
     }
 
-    //Render the player
-    frames := len(player.sprite.frames)
-    location := player.sprite.frames[int(timer.animation) % frames]
-    gfx_draw_sprite(
-        position = player.position,
-        scale = player.scale,
-        color = player.color,
-        location = location,
-        size = player.sprite.size,
-        sprite_batch = &renderer.sprite_batch,
-    )
+    update_renderer(display_width, display_height)
 
-    // Upload the sprite batch to the GPU!
-    if renderer.sprite_batch.len > 0 {
-        sprite_batch := renderer.sprite_batch.instances[:renderer.sprite_batch.len]
-
-        sg.update_buffer(
-            renderer.offscreen.bindings.vertex_buffers[1],
-            as_range(sprite_batch),
-        )
-    }
-
-    ////////////////////////////////////////////////////////////////////////////
-    // Offscreen rendering pass
-
-    // Pass a single uniform struct to the shaders.
-    // These are the values that will be reused by _all_ our sprites.
-    // Meaning, they are the same for all sprites, we only need to upload them once.
-    vertex_shader_uniforms := shaders.Vs_Params {
-        pixel_to_viewport_multiplier = renderer.offscreen.pixel_to_viewport_multiplier,
-        sprite_atlas_size            = {
-            f32(renderer.offscreen.sprite_atlas_size.x),
-            f32(renderer.offscreen.sprite_atlas_size.y),
-        },
-        camera_mvp = g.camera.mvp,
-    }
-
-    // Begin the pass.
-    sg.begin_pass(renderer.offscreen.pass)
-
-    // Apply the pipelines.
-    sg.apply_pipeline(renderer.offscreen.pipeline)
-    sg.apply_bindings(renderer.offscreen.bindings)
-    // Apply the uniforms we declared above.
-    sg.apply_uniforms(
-        shaders.UB_vs_params,
-        {
-            ptr = &vertex_shader_uniforms,
-            size = size_of(vertex_shader_uniforms),
-        },
-    )
-    // Do the drawing.
-    sg.draw(0, QUAD_INDEX_SIZE, renderer.sprite_batch.len)
-
-    // The offscreen pass is over, we have now drawn all of our sprites on the `render_target`.
-    sg.end_pass()
-
-    ////////////////////////////////////////////////////////////////////////////
-    // Display rendering pass
-
-    sg.begin_pass(
-        {
-            action    = renderer.display.pass_action,
-            swapchain = sglue.swapchain(),
-            label     = "display-pass",
-        },
-    )
-    sg.apply_pipeline(renderer.display.pipeline)
-    sg.apply_bindings(renderer.display.bindings)
-
-    // Calculate the aspect ratios
-    game_aspect := f32(GAME_WIDTH) / f32(GAME_HEIGHT)
-    display_aspect := display_width / display_height
-
-    // Calculate the viewport size
-    viewport_width := display_width
-    viewport_height := display_height
-
-    if game_aspect > display_aspect {
-        viewport_height = display_width / game_aspect
-    } else {
-        viewport_width = display_height * game_aspect
-    }
-
-    // Calculate the viewport position to center the game
-    viewport_x := (display_width - viewport_width) / 2
-    viewport_y := (display_height - viewport_height) / 2
-
-    // Adjust the viewport to maintain pixel-perfect scaling
-    sg.apply_viewport(i32(viewport_x), i32(viewport_y), i32(viewport_width), i32(viewport_height), false)
-
-    // Draw the image from the offscreen renderer to the newly scaled viewport.
-    sg.draw(0, QUAD_INDEX_SIZE, 1)
-    sg.end_pass()
-    sg.commit()
     mouse_move = {}
     key_down_last = key_down
+
+    fmt.println("Player world pos:", player.position)
+    fmt.println("Camera position:", camera.position)
+    fmt.println("Player screen pos:", world_to_screen(player.position))
+    fmt.println("Sprite count:", len(sprites_to_render))
 }
 
 tick :: proc() {
@@ -991,40 +447,56 @@ tick :: proc() {
 //TODO: Implement keybinds
 handle_input :: proc() {
     if key_down[.ESCAPE] {
-		sapp.quit()
-		return
-	}
-    if key_down[.E] && !key_down_last[.E] {
-        fmt.printf("Generating New World\n")
-        w = initWorld(WORLD_WIDTH, WORLD_HEIGHT)
-        generateWorld(&w)
+        sapp.quit()
+        return
     }
+    
+    // Player movement
     if key_down[.RIGHT] {
-        player.position.x += 1
+        player.position[0] += 3  // Increased speed for better movement
         if !player.facingRight {
             FlipPlayer(&player)
             player.facingRight = true
         }
-        fmt.printf("Player Position: %f %f\n", player.position.x, player.position.y)
-        //g.cameraPosition.x += .01
     }
     if key_down[.LEFT] {
-        player.position.x -= 1
+        player.position[0] -= 3  // Increased speed for better movement
         if player.facingRight {
             FlipPlayer(&player)
             player.facingRight = false
         }
-        fmt.printf("Player Position: %f %f\n", player.position.x, player.position.y)
-        //g.cameraPosition.x -= .01
     }
     if key_down[.UP] {
-        player.position.y += 1
-        //g.cameraPosition.y -= .01
+        player.position[1] += 3
     }
     if key_down[.DOWN] {
-        player.position.y -= 1
-        //g.cameraPosition.y += .01
+        player.position[1] -= 3
     }
+    
+    // Toggle camera following with Space
+    if key_down[.SPACE] && !key_down_last[.SPACE] {
+        if camera.target == nil {
+            camera.target = &player
+        } else {
+            camera.target = nil
+        }
+    }
+    
+    // Manual camera control when not following player (WASD)
+    if camera.target == nil {
+        camera_speed := f32(5)
+        if key_down[.W] { camera.position.y -= camera_speed }
+        if key_down[.S] { camera.position.y += camera_speed }
+        if key_down[.A] { camera.position.x -= camera_speed }
+        if key_down[.D] { camera.position.x += camera_speed }
+    }
+    
+    // Keep player within world bounds
+    player.position[0] = math.clamp(player.position[0], 0, WORLD_WIDTH * BLOCK_SIZE)
+    player.position[1] = math.clamp(player.position[1], 0, WORLD_HEIGHT * BLOCK_SIZE)
+
+    // Print player position
+    fmt.println("Player at:", player.position)
 }
 
 // Cleanup function
@@ -1050,50 +522,21 @@ event_cb :: proc "c" (ev: ^sapp.Event) {
         case .KEY_UP:
             key_down[ev.key_code] = false
     }
-    if ev.type == .MOUSE_DOWN && ev.mouse_button == .LEFT {
-        x: f32 = player.position.x
-        y: f32 = player.position.y
-        fmt.printf("Player Position (world): %f %f\n", x, y)
-        
-        // Remove worldToCamera conversion; use the player's world position directly.
-        targetPos := Vec2f{x / -GAME_WIDTH, y / -GAME_HEIGHT}
-        fmt.printf("Target Camera Position (world): %f %f\n", targetPos.x, targetPos.y)
-        fmt.printf("Current Camera Position (world): %f %f\n", g.cameraPosition.x, g.cameraPosition.y)
-        
-        // Smoothly move the camera (in world units) to the target position.
-        move_camera(
-            from = g.cameraPosition,
-            to = cameraDeltaToWorld(targetPos),
-            duration = f32(1.0),
-            easing = easeInSine,
-            camera_position = &g.cameraPosition,
-        )
-    }
-    
-    
-
     // Update the viewport multiplier and camera projection when the window is resized.
     if ev.type == .RESIZED {
+        // Update renderer's viewport multiplier
         renderer.offscreen.pixel_to_viewport_multiplier =
-        gfx_get_pixel_to_viewport_multiplier(GAME_WIDTH, GAME_HEIGHT)
-        UpdateOrtho()
+            gfx_get_pixel_to_viewport_multiplier(GAME_WIDTH, GAME_HEIGHT)
+        
+        // Update camera bounds if needed
+        camera.bounds.max_x = max(0, WORLD_WIDTH * BLOCK_SIZE - GAME_WIDTH)
+        camera.bounds.max_y = max(0, WORLD_HEIGHT * BLOCK_SIZE - GAME_HEIGHT)
     }
 }
 
 main :: proc() {
     context.logger = log.create_console_logger()
 	default_context = context
-    UpdateOrtho()
-
-    fmt.println("MVP Matrix:");
-    for row in 0..<4 {
-        fmt.printf("%f %f %f %f\n",
-        g.camera.mvp[row*4 + 0],
-        g.camera.mvp[row*4 + 1],
-        g.camera.mvp[row*4 + 2],
-        g.camera.mvp[row*4 + 3]);
-    }
-
     sapp.run({
 		width = GAME_WIDTH,
 		height = GAME_HEIGHT,
