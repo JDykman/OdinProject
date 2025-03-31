@@ -18,6 +18,25 @@ import "shaders"
 import "core:c"
 import "core:time"
 
+// Debug logging that only prints in development builds
+debug_print :: proc(args: ..any) {
+    when DEBUG_MODE {
+        fmt.println(..args)
+    }
+}
+
+// For format strings
+debug_printf :: proc(format: string, args: ..any) {
+    when DEBUG_MODE {
+        fmt.printf(format, ..args)
+    }
+}
+
+// Set to true for development features, false for release
+DEBUG_MODE :: #config(DEBUG, true)
+
+// Runtime constant that can be checked by any code
+IS_DEV_BUILD :: DEBUG_MODE
 
 default_context: runtime.Context
 
@@ -411,22 +430,17 @@ frame_cb :: proc "c" () {
     })
     
     // Add test sprites at fixed world positions
-    for x := 0; x < WORLD_WIDTH; x += 5 {
-        for y := 0; y < WORLD_HEIGHT; y += 5 {
-            world_pos := [2]f32{f32(x * BLOCK_SIZE), f32(y * BLOCK_SIZE)}
-            draw_world_sprite(world_pos, SPRITES[.DIRT])
-        }
-    }
+    draw_dev_sprites()
 
     update_renderer(display_width, display_height)
 
     mouse_move = {}
     key_down_last = key_down
 
-    fmt.println("Player world pos:", player.position)
-    fmt.println("Camera position:", camera.position)
-    fmt.println("Player screen pos:", world_to_screen(player.position))
-    fmt.println("Sprite count:", len(sprites_to_render))
+    debug_print("Player world pos:", player.position)
+    debug_print("Camera position:", camera.position)
+    debug_print("Player screen pos:", world_to_screen(player.position))
+    debug_print("Sprite count:", len(sprites_to_render))
 }
 
 tick :: proc() {

@@ -648,7 +648,27 @@ update_renderer :: proc(display_width, display_height: f32) {
     sg.end_pass()
     sg.commit()
 }
-
+draw_dev_sprites :: proc() {
+    when DEBUG_MODE {
+        // Draw world grid
+        for x := 0; x < WORLD_WIDTH; x += 5 {
+            for y := 0; y < WORLD_HEIGHT; y += 5 {
+                world_pos := [2]f32{f32(x * BLOCK_SIZE), f32(y * BLOCK_SIZE)}
+                draw_world_sprite(world_pos, SPRITES[.DIRT])
+            }
+        }
+        
+        // Draw world boundaries
+        for x := 0; x < WORLD_WIDTH; x += 1 {
+            draw_world_sprite([2]f32{f32(x * BLOCK_SIZE), 0}, SPRITES[.STONE])
+            draw_world_sprite([2]f32{f32(x * BLOCK_SIZE), f32((WORLD_HEIGHT-1) * BLOCK_SIZE)}, SPRITES[.STONE])
+        }
+        for y := 0; y < WORLD_HEIGHT; y += 1 {
+            draw_world_sprite([2]f32{0, f32(y * BLOCK_SIZE)}, SPRITES[.STONE])
+            draw_world_sprite([2]f32{f32((WORLD_WIDTH-1) * BLOCK_SIZE), f32(y * BLOCK_SIZE)}, SPRITES[.STONE])
+        }
+    }
+}
 // main :: proc() {
 //     sapp.run(
 //         {

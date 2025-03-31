@@ -16,5 +16,8 @@ node_modules/
 !.vscode/extensions.json
 
 # Project Files
-OdinProject.exe
-OdinProject.pdb
+OdinProject-Release.exe
+OdinProject-Release.pdb
+
+OdinProject-DevBuild.exe
+OdinProject-DevBuild.pdb
