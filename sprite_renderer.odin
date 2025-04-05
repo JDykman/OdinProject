@@ -91,7 +91,7 @@ gfx_draw_sprite :: proc(
     size: [2]u16,
     sprite_batch: ^Sprite_Batch,
 ) {
-    if sprite_batch.len > BUDGET_SPRITES do return
+    if sprite_batch.len >= BUDGET_SPRITES do return
 
     vertex: Sprite_Instance = {
         location = {f32(location.x), f32(location.y)},
@@ -529,7 +529,7 @@ init_renderer :: proc(GAME_WIDTH, GAME_HEIGHT: f32) {
 
     // Force initial viewport calculation with current window dimensions
     display_width, display_height := f32(sapp.width()), f32(sapp.height())
-    fmt.println("Initial window dimensions:", display_width, display_height)
+    debug_print("Initial window dimensions:", display_width, display_height)
 }
 
 update_renderer :: proc(display_width, display_height: f32) {
@@ -573,7 +573,7 @@ update_renderer :: proc(display_width, display_height: f32) {
         )
     }
 
-    fmt.println("Rendering sprite batch with", renderer.sprite_batch.len, "sprites")
+    debug_print("Rendering sprite batch with", renderer.sprite_batch.len, "sprites")
 
     ////////////////////////////////////////////////////////////////////////////
     // Offscreen rendering pass

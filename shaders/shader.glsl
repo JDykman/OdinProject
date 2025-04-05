@@ -1,5 +1,6 @@
 #pragma sokol @header package shaders
 #pragma sokol @header import sg "shared:sokol/gfx"
+
 #pragma sokol @vs vs_offscreen
 #pragma sokol @glsl_options flip_vert_y
 

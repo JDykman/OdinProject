@@ -21,14 +21,14 @@ import "core:time"
 // Debug logging that only prints in development builds
 debug_print :: proc(args: ..any) {
     when DEBUG_MODE {
-        fmt.println(..args)
+        //fmt.println(..args)
     }
 }
 
 // For format strings
 debug_printf :: proc(format: string, args: ..any) {
     when DEBUG_MODE {
-        fmt.printf(format, ..args)
+        //fmt.printf(format, ..args)
     }
 }
 
@@ -203,18 +203,8 @@ Player :: struct {
     health:   f32,
 }
 
-// Block structure: each block (or pixel) in our simulation.
-Block :: struct {
-    Type:         int,   // Block type: air, dirt, stone, water, etc.
-    Sprite:       Sprite, // Sprite to render
-    Density:      f32,   // For physics-based interactions
-    Color:        Color,  // RGBA color for rendering
-    Health:       f32,   // Durability, used for damage or decay simulation
-    Velocity:     Vec2f,  // Dynamic movement (for falling or fluid behavior)
-    Temperature:  f32,   // For thermal effects (melting, burning, etc.)
-    Flags:        int,   // Bitmask for extra properties (flammable, liquid, etc.)
-}
-
+// Global camera instance
+camera: Camera
 Camera :: struct {
     position: Vec2f,  // Camera position in world space
     target: ^Player,  // Optional target to follow (can be nil)
@@ -226,50 +216,36 @@ Camera :: struct {
     zoom: f32,        // Future expansion: camera zoom
 }
 
-// Global camera instance
-camera: Camera
+// Block structure: each block (or pixel) in our simulation.
+Block :: struct {
+    Type:         int,   // Block_Dict id: 1=air, 2=dirt, 3=grass, 4=stone, etc.
+    Sprite:       Sprite, // Sprite to render
+    Solid:        bool,  // Is this block solid?
+}
+
+Block_Dict := [?]Block{
+	// Assign by index
+	0 = BLOCK_AIR
+}
 
 // Block type constants.
 BLOCK_AIR : Block = {
     Type = 0,
-    Density = 0.0,
-    Color = {0, 0, 0, 0},
-    Health = 0.0,
-    Velocity = {0, 0},
-    Temperature = 0.0,
-    Flags = 0
+    Sprite = SPRITES[.NONE],
+    Solid = false
 }
 BLOCK_DIRT : Block = {
     Type = 1,
-    Density = 1.0,
-    Color = {0.5, 0.3, 0.1, 1.0},
-    Health = 1.0,
-    Velocity = {0, 0},
-    Temperature = 0.0,
-    Flags = 0
+    Sprite = SPRITES[.DIRT]
+}
+BLOCK_GRASS : Block = {
+    Type = 1,
+    Sprite = SPRITES[.DIRT]
 }
 BLOCK_STONE : Block = {
     Type = 2,
-    Density = 2.0,
-    Color = {0.5, 0.5, 0.5, 1.0},
-    Health = 2.0,
-    Velocity = {0, 0},
-    Temperature = 0.0,
-    Flags = 0
+    Sprite = SPRITES[.STONE]
 }
-BLOCK_WATER : Block = {
-    Type = 3,
-    Density = 1.0,
-    Color = {0.0, 0.0, 1.0, 0.5},
-    Health = 1.0,
-    Velocity = {0, 0},
-    Temperature = 0.0,
-    Flags = FLAG_IS_LIQUID
-}
-
-FLAG_IS_FLAMMABLE := 1 << 0
-FLAG_IS_LIQUID    := 1 << 1
-
 
 // World generation parameters.
 
@@ -282,7 +258,7 @@ World :: struct {
     height: int, // Height in blocks
     seed: i64,
     noiseFreq: f32,
-    worldGrid: [][]Block,
+    worldGrid: [][]int, // Contains block types
 }
 w : World
 
@@ -311,6 +287,55 @@ FlipPlayer :: proc(p : ^Player) {
     p.scale = {-p.scale.x, p.scale.y}
 }
 
+generateWorld :: proc(w : ^World){
+    // Create array
+    w.worldGrid = make([][]int, w.width)
+    for i in 0..<w.width {
+        w.worldGrid[i] = make([]int, w.height)
+        for j in 0..<w.height {
+            if j < 5 {
+                w.worldGrid[i][j] = 1
+            }else{
+                w.worldGrid[i][j] = 0
+            }
+        }
+    }
+    fmt.println("World Generated")
+}
+
+renderWorld :: proc() {
+    if &w.worldGrid != nil {
+        // Loop through all blocks in the world grid
+        for x in 0..<w.width {
+            for y in 0..<w.height {
+                block_type := w.worldGrid[x][y]
+                world_pos := [2]f32{f32(x * BLOCK_SIZE), f32(y * BLOCK_SIZE)}
+                
+                // Skip rendering air blocks
+                if block_type == 0 {
+                    continue
+                }
+                
+                // Select the appropriate sprite based on block type
+                sprite: Sprite
+                color := Color{255, 255, 255, 1}
+                
+                switch block_type {
+                    case 1: // Dirt
+                        sprite = SPRITES[.DIRT]
+                    case 2: // Stone
+                        sprite = SPRITES[.STONE]
+                    case: // Default fallback
+                        sprite = SPRITES[.DIRT]
+                }
+                
+                // Draw the block in world coordinates
+                draw_world_sprite(world_pos, sprite, {1, 1}, color)
+            }
+        }
+    }
+}
+
 // Initialize the Sokol application
 init_cb :: proc "c" () {
     context = default_context
@@ -330,7 +355,7 @@ init_cb :: proc "c" () {
     assert(GAME_HEIGHT > 0, fmt.tprintf("game_height > 0: %v", GAME_HEIGHT))
 
     init_renderer(GAME_WIDTH, GAME_HEIGHT)
-    fmt.println("Sprite atlas initialized with size:", renderer.offscreen.sprite_atlas_size)
+    debug_print("Sprite atlas initialized with size:", renderer.offscreen.sprite_atlas_size)
 
     // Initialize camera
     camera = Camera{
@@ -401,6 +426,8 @@ draw_world_sprite :: proc(
 // Frame update function
 frame_cb :: proc "c" () {
     context = runtime.default_context()
+    
+    clear(&sprites_to_render)  // Moved clear to the top
 
     ////////////////////////////////////////////////////////////////////////////
     // Timers & Input
@@ -408,6 +435,8 @@ frame_cb :: proc "c" () {
     tick()
     handle_input()
     update_camera()
+
+    renderWorld()
 
     // Setup resolution scale depending on current display size
     dpi_scale := sapp.dpi_scale()
@@ -418,7 +447,6 @@ frame_cb :: proc "c" () {
         display_height,
         dpi_scale,
     )
-    clear(&sprites_to_render)
     
     // Append the player sprite instead of a separate draw call.
     screen_pos := world_to_screen(player.position)
@@ -430,7 +458,7 @@ frame_cb :: proc "c" () {
     })
     
     // Add test sprites at fixed world positions
-    draw_dev_sprites()
+    //draw_dev_sprites()
 
     update_renderer(display_width, display_height)
 
@@ -486,15 +514,26 @@ handle_input :: proc() {
     if key_down[.DOWN] {
         player.position[1] -= 3
     }
+    if key_down[.SPACE] && !key_down_last[.SPACE] {
+        // Generate a new world by updating the global 'w'
+        w = World{
+            width = WORLD_WIDTH,
+            height = WORLD_HEIGHT,
+            seed = rand.int63(), // New seed
+            noiseFreq = WORLD_NOISE_FREQ,
+        }
+        generateWorld(&w)
+        debug_print("World generated with seed:", w.seed)
+    }
     
     // Toggle camera following with Space
-    if key_down[.SPACE] && !key_down_last[.SPACE] {
-        if camera.target == nil {
-            camera.target = &player
-        } else {
-            camera.target = nil
-        }
-    }
+    // if key_down[.SPACE] && !key_down_last[.SPACE] {
+    //     if camera.target == nil {
+    //         camera.target = &player
+    //     } else {
+    //         camera.target = nil
+    //     }
+    // }
     
     // Manual camera control when not following player (WASD)
     if camera.target == nil {
@@ -510,7 +549,7 @@ handle_input :: proc() {
     player.position[1] = math.clamp(player.position[1], 0, WORLD_HEIGHT * BLOCK_SIZE)
 
     // Print player position
-    fmt.println("Player at:", player.position)
+    debug_print("Player position:", player.position)
 }
 
 // Cleanup function
