@@ -530,17 +530,25 @@ draw_world_sprite :: proc(
 ) {
     screen_pos := world_to_screen(world_pos)
     
-    // Only draw if on screen (basic culling)
-    // Cast sprite size from u16 to f32 to match screen_pos type
-    if screen_pos[0] > -f32(sprite.size[0]) && screen_pos[0] < GAME_WIDTH &&
-       screen_pos[1] > -f32(sprite.size[1]) && screen_pos[1] < GAME_HEIGHT {
-        append(&sprites_to_render, Sprite_To_Render{
-            position = screen_pos,
-            sprite   = sprite,
-            scale    = scale,
-            color    = color,
-        })
+    w := i32(sprite.size[0]) * scale[0]
+    h := i32(sprite.size[1]) * scale[1]
+    sy := i32(screen_pos[1])
+    sx := i32(screen_pos[0])
+
+    // Skip if the entire bounding box is to the left, right, above, or below the screen:
+    if sx + w < 0 || sx - w > GAME_WIDTH || sy + h < 0 || sy - h > GAME_HEIGHT // fully off bottom
+    {
+        return
     }
+
+    // Otherwise, draw it:
+    append(&sprites_to_render, Sprite_To_Render{
+        position = screen_pos,
+        sprite   = sprite,
+        scale    = scale,
+        color    = color,
+    })
+
 }
 // Frame update function
 frame_cb :: proc "c" () {
