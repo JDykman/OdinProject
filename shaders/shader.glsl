@@ -26,7 +26,7 @@ out vec4 rgba;            // Vertex color
 void main() {
     // Step 1: Calculate the final position in screen space
     // Note: position is already transformed by camera in CPU code
-    vec2 pixel_position = vertex_position * size * scale + position;
+    vec2 pixel_position = (vertex_position - 0.5) * size * scale + position;
     
     // Step 2: Convert from screen space to normalized device coordinates (NDC)
     // This maps (0,0) to (-1,1) and (screen_width, screen_height) to (1,-1)

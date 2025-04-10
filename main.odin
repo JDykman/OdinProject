@@ -54,24 +54,30 @@ TILE_UNIT :: 16
 GAME_WIDTH :: TILES_X * TILE_UNIT
 GAME_HEIGHT :: TILES_Y * TILE_UNIT
 
+ATLAS_HEIGHT :: 256   // Add this constant, adjust the value as needed
+
 SPRITES :: #partial [Sprite_Name]Sprite {
     .PINK_MONSTER = {
-        frames = {{0, 0}, {19, 0}, {38, 0}, {0, 28}, {19, 28}, {38, 28}},
-        size = {19, 28},
+        frames = {{0, 2}},
+        size = {BLOCK_SIZE, BLOCK_SIZE},
     },
     .NONE = {
-        frames = {},
+        frames = {{0,28}},
         size = {},
     },
     .DIRT = {
-        frames = {{0*BLOCK_SIZE, 0*BLOCK_SIZE}},
+        // Use correct coordinates with vertical flip enabled:
+        frames = {{0, 0}},
         size = {BLOCK_SIZE, BLOCK_SIZE},
     },
     .STONE = {
-        frames = {{8*BLOCK_SIZE, 0*BLOCK_SIZE}},
+        frames = {{0, 1}},
         size = {BLOCK_SIZE, BLOCK_SIZE},
     },
-
+    .GRASS = {
+        frames = {{0, 15}},
+        size = {BLOCK_SIZE, BLOCK_SIZE},
+    },
 }
 
 //// Vector Types ////
@@ -170,6 +176,11 @@ Sprite_To_Render :: struct {
     scale:    Scale,
     sprite:   Sprite,
 }
+Sprite_Sheet :: struct {
+    atlas:   [2]u16,
+    size:    [2]u16,
+    frames:  [][2]u16,
+}
 
 Sprite :: struct {
     frames: [][2]u16,
@@ -181,6 +192,7 @@ Sprite_Name :: enum {
     PINK_MONSTER,
     DIRT,
     STONE,
+    GRASS,
 }
 
 player: Player = Player{
@@ -193,14 +205,24 @@ player: Player = Player{
     health = 100.0,
 }
 
+
 Player :: struct {
-    position: Pos,
+    position: Pos, // Center of the sprite
     sprite : Sprite,
     color : Color,
     scale : Scale,
     facingRight : bool,
     velocity: Vec2f,
     health:   f32,
+}
+
+Entity :: struct {
+    position: Pos,
+    sprite: Sprite,
+    color: Color,
+    scale: Scale,
+    velocity: Vec2f,
+    health: f32,
 }
 
 // Global camera instance
@@ -218,14 +240,18 @@ Camera :: struct {
 
 // Block structure: each block (or pixel) in our simulation.
 Block :: struct {
-    Type:         int,   // Block_Dict id: 1=air, 2=dirt, 3=grass, 4=stone, etc.
+    Type:         i32,   // Block_Dict id: 1=air, 2=dirt, 3=grass, 4=stone, etc.
     Sprite:       Sprite, // Sprite to render
     Solid:        bool,  // Is this block solid?
+    Dynamic:      bool,  // Is this block dynamic?
 }
 
 Block_Dict := [?]Block{
 	// Assign by index
-	0 = BLOCK_AIR
+	0 = BLOCK_AIR,
+    1 = BLOCK_DIRT,
+    2 = BLOCK_STONE,
+    3 = BLOCK_GRASS,
 }
 
 // Block type constants.
@@ -236,26 +262,29 @@ BLOCK_AIR : Block = {
 }
 BLOCK_DIRT : Block = {
     Type = 1,
-    Sprite = SPRITES[.DIRT]
-}
-BLOCK_GRASS : Block = {
-    Type = 1,
-    Sprite = SPRITES[.DIRT]
+    Sprite = SPRITES[.DIRT],
+    Solid = true
 }
 BLOCK_STONE : Block = {
     Type = 2,
-    Sprite = SPRITES[.STONE]
+    Sprite = SPRITES[.STONE],
+    Solid = true
+}
+BLOCK_GRASS : Block = {
+    Type = 3,
+    Sprite = SPRITES[.GRASS],
+    Solid = true
 }
 
 // World generation parameters.
 
 BLOCK_SIZE :: 16 // Block size (in pixels)
-WORLD_WIDTH  :: 50 // Width of the world (in pixels)
-WORLD_HEIGHT :: 23  // At least as tall as game view (22.5 tiles)
+WORLD_WIDTH  :: 500 // Width of the world (in pixels)
+WORLD_HEIGHT :: 25  // At least as tall as game view (22.5 tiles)
 
 World :: struct {
-    width: int, // Width in blocks
-    height: int, // Height in blocks
+    width: i32, // Width in blocks
+    height: i32, // Height in blocks
     seed: i64,
     noiseFreq: f32,
     worldGrid: [][]int, // Contains block types
@@ -273,6 +302,9 @@ WORLD_NOISE_FREQ: f32 = 0.1
 // ITEM_INDEX
 sprites_to_render := make([dynamic]Sprite_To_Render)
 
+collideableEntities := make([dynamic]Entity)
+dynamicEntities := make([dynamic]Entity)
+dynamicBlocks := make([dynamic]Block)
 //// Math Shit ////
 easeInSine :: proc(x: f32) -> f32{
     return 1 - math.cos_f32((x * math.PI) / 2)
@@ -282,9 +314,31 @@ easeOutSine :: proc(x: f32) -> f32{
     return math.sin_f32((x * math.PI) / 2)
 }
 
-
 FlipPlayer :: proc(p : ^Player) {
     p.scale = {-p.scale.x, p.scale.y}
+}
+
+IsBlockHere :: proc(w:^World, pos:Vec2i) -> bool {
+    i := screen_to_world({f32(pos.x), f32(pos.y)})
+    if(w.worldGrid[i.x][i.y] == 0){
+        return false
+    }
+    return true // default return value, implement actual logic as needed
+}
+
+PlaceBlock :: proc(w:^World, pos:Vec2i, type:i32, force:bool=false){
+    if force || IsBlockHere(w, pos){
+        block : Block
+        for b in Block_Dict{
+            if(b.Type == type){
+                block = b
+            }
+        }
+        if block.Solid {
+            append(&dynamicBlocks, block)
+        }
+        w.worldGrid[pos.x][pos.y] = int(block.Type)
+    }
 }
 
 generateWorld :: proc(w : ^World){
@@ -293,14 +347,72 @@ generateWorld :: proc(w : ^World){
     for i in 0..<w.width {
         w.worldGrid[i] = make([]int, w.height)
         for j in 0..<w.height {
-            if j < 5 {
-                w.worldGrid[i][j] = 1
+            if j < 15 {
+                r := rand.int31_max(2)
+                r+=1
+                fmt.println(r)
+                PlaceBlock(w, Vec2i{i32(i), i32(j)}, r, true)
             }else{
                 w.worldGrid[i][j] = 0
             }
         }
     }
+    //Grass Pass
+    for i in 0..<w.height-1 {  // Stop one row before the bottom to avoid out-of-bounds
+        for j in 0..<w.width {
+            if(w.worldGrid[j][i] == 1) && w.worldGrid[j][i+1] == 0{
+                rNum := rand.int31_max(10) + 1
+                w.worldGrid[j][i] = 3 // Set block to grass
+            }
+        }
+    }
     fmt.println("World Generated")
+}
+
+maybe_grow_grass :: proc() {
+    for x in 0..<w.width {
+        for y in 0..<w.height {
+            if w.worldGrid[x][y] != int(BLOCK_DIRT.Type) {
+                continue
+            }
+
+            touching_air := false
+            touching_grass := false
+
+            directions := [][2]i32{
+                {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+            }
+
+            for dir in directions {
+                nx := x + dir[0]
+                ny := y + dir[1]
+
+                if nx < 0 || ny < 0 || nx >= w.width || ny >= w.height {
+                    continue
+                }
+
+                neighbor := w.worldGrid[nx][ny]
+                if neighbor == int(BLOCK_AIR.Type) {
+                    touching_air = true
+                } else if neighbor == int(BLOCK_GRASS.Type) {
+                    touching_grass = true
+                }
+
+                // Early exit if both conditions are met
+                if touching_air && touching_grass {
+                    break
+                }
+            }
+
+            if touching_air && touching_grass {
+                if rand.int31_max(5) == 0 {
+                    w.worldGrid[x][y] = int(BLOCK_GRASS.Type)
+                }
+            }
+        }
+    }
+
+    fmt.println("Grass growth step completed")
 }
 
 renderWorld :: proc() {
@@ -319,14 +431,16 @@ renderWorld :: proc() {
                 // Select the appropriate sprite based on block type
                 sprite: Sprite
                 color := Color{255, 255, 255, 1}
-                
+
                 switch block_type {
                     case 1: // Dirt
-                        sprite = SPRITES[.DIRT]
+                        sprite = BLOCK_DIRT.Sprite
                     case 2: // Stone
-                        sprite = SPRITES[.STONE]
+                        sprite = BLOCK_STONE.Sprite
+                    case 3: // Grass
+                        sprite = BLOCK_GRASS.Sprite
                     case: // Default fallback
-                        sprite = SPRITES[.DIRT]
+                        sprite = BLOCK_AIR.Sprite
                 }
                 
                 // Draw the block in world coordinates
@@ -403,6 +517,11 @@ world_to_screen :: proc(world_pos: [2]f32) -> [2]f32 {
     screen_y := world_pos[1] - camera.position.y
     return {screen_x, screen_y}
 }
+screen_to_world :: proc(screen_pos: [2]f32) -> [2]i32 {
+    world_x := (screen_pos[0] / camera.zoom) + camera.position.x
+    world_y := ((GAME_HEIGHT - screen_pos[1]) / camera.zoom) + camera.position.y
+    return {i32(world_x), i32(world_y)}
+}
 draw_world_sprite :: proc(
     world_pos: [2]f32, 
     sprite: Sprite,
@@ -471,20 +590,29 @@ frame_cb :: proc "c" () {
     debug_print("Sprite count:", len(sprites_to_render))
 }
 
+dirt_check_timer: f64 = 0
+DIRT_CHECK_INTERVAL : f64 = 1.0
+
 tick :: proc() {
     new_time := time.now()
     frame_time := time.duration_seconds(time.diff(timer.current, new_time))
     if frame_time > TICK_MAX do frame_time = TICK_MAX
     timer.current = new_time
 
-    @(static) timer_tick_animation := TICK_ANIMATION
+    dirt_check_timer += frame_time
+    if dirt_check_timer >= DIRT_CHECK_INTERVAL {
+        dirt_check_timer = 0
+        maybe_grow_grass()
+    }
 
+    @(static) timer_tick_animation := TICK_ANIMATION
     timer_tick_animation -= frame_time
     if timer_tick_animation <= 0 {
         timer.animation += 1
         timer_tick_animation += TICK_ANIMATION
     }
 }
+
 
 //TODO: Implement keybinds
 handle_input :: proc() {
@@ -574,6 +702,28 @@ event_cb :: proc "c" (ev: ^sapp.Event) {
             key_down[ev.key_code] = true
         case .KEY_UP:
             key_down[ev.key_code] = false
+    }
+    // On click set block at mouse position to air
+    if ev.type == .MOUSE_DOWN {
+        mouse_pos := [2]f32{ev.mouse_x, ev.mouse_y}
+        fmt.println("Mouse pos:", mouse_pos)
+        world_pos := screen_to_world(mouse_pos)
+        fmt.println("World pos:", world_pos)
+        block_x := i32(world_pos[0] / BLOCK_SIZE)
+        block_y := i32(world_pos[1] / BLOCK_SIZE)
+        if key_down[.LEFT_SHIFT]{
+            // Check if within bounds
+            if block_x >= 0 && block_x < w.width && block_y >= 0 && block_y < w.height {
+                w.worldGrid[block_x][block_y] = int(BLOCK_AIR.Type)
+                debug_print("Block at", block_x, block_y, "set to air")
+            }
+        }else if key_down[.LEFT_CONTROL]{
+            // Check if within bounds
+            if block_x >= 0 && block_x < w.width && block_y >= 0 && block_y < w.height {
+                w.worldGrid[block_x][block_y] = int(BLOCK_DIRT.Type)
+                debug_print("Block at", block_x, block_y, "set to dirt")
+            }
+        }
     }
     // Update the viewport multiplier and camera projection when the window is resized.
     if ev.type == .RESIZED {

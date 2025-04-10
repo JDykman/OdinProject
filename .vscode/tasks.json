@@ -4,7 +4,7 @@
 		{
 			"label": "Build & Run (Dev)",
 			"type": "shell",
-			"command": "build_dev.bat run",
+			"command": "tasks\\build_dev.bat run",
 			"problemMatcher": [],
 			"group": {
 				"kind": "build",
@@ -14,19 +14,19 @@
 		{
 			"label": "Build Only (Dev)",
 			"type": "shell",
-			"command": "build_dev.bat",
+			"command": "tasks\\build_dev.bat",
 			"problemMatcher": []
 		},
 		{
 			"label": "Build & Run (Release)",
 			"type": "shell",
-			"command": "build_release.bat run",
+			"command": "tasks\\build_release.bat run",
 			"problemMatcher": []
 		},
 		{
 			"label": "Build Only (Release)",
 			"type": "shell",
-			"command": "build_release.bat",
+			"command": "tasks\\build_release.bat",
 			"problemMatcher": []
 		}
 	]

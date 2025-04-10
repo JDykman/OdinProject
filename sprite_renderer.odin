@@ -92,9 +92,8 @@ gfx_draw_sprite :: proc(
     sprite_batch: ^Sprite_Batch,
 ) {
     if sprite_batch.len >= BUDGET_SPRITES do return
-
     vertex: Sprite_Instance = {
-        location = {f32(location.x), f32(location.y)},
+        location = {f32(location.x * size.x), f32(location.y * size.y)},
         size     = {f32(size.x), f32(size.y)},
         position = {f32(position.x), f32(position.y)},
         scale    = {f32(scale.x), f32(scale.y)},
