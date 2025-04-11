@@ -38,6 +38,8 @@ DEBUG_MODE :: #config(DEBUG, true)
 // Runtime constant that can be checked by any code
 IS_DEV_BUILD :: DEBUG_MODE
 
+
+
 default_context: runtime.Context
 
 Globals :: struct {
@@ -318,15 +320,29 @@ FlipPlayer :: proc(p : ^Player) {
     p.scale = {-p.scale.x, p.scale.y}
 }
 
-IsBlockHere :: proc(w:^World, pos:Vec2i) -> bool {
-    i := screen_to_world({f32(pos.x), f32(pos.y)})
-    if(w.worldGrid[i.x][i.y] == 0){
+IsBlockHere :: proc(w: ^World, pos: [2]i32) -> bool {
+    // Convert the pos (which is in pixel-space) to a world pixel coordinate
+    world_pixel := screen_to_world({f32(pos[0]), f32(pos[1])})
+    
+    // Convert world pixel coordinate to grid coordinate by dividing by BLOCK_SIZE
+    grid_x := i32(world_pixel[0] / f32(BLOCK_SIZE))
+    grid_y := i32(world_pixel[1] / f32(BLOCK_SIZE))
+    
+    // Check grid bounds to avoid out-of-range errors
+    if grid_x < 0 || grid_x >= w.width || grid_y < 0 || grid_y >= w.height {
         return false
     }
-    return true // default return value, implement actual logic as needed
+    
+    // Now use the grid coordinates to index into the world grid
+    if w.worldGrid[grid_x][grid_y] == 0 {
+        return false
+    }
+    
+    return true
 }
 
-PlaceBlock :: proc(w:^World, pos:Vec2i, type:i32, force:bool=false){
+
+PlaceBlock :: proc(w:^World, pos:[2]i32, type:i32, force:bool=false){
     if force || IsBlockHere(w, pos){
         block : Block
         for b in Block_Dict{
@@ -351,7 +367,7 @@ generateWorld :: proc(w : ^World){
                 r := rand.int31_max(2)
                 r+=1
                 fmt.println(r)
-                PlaceBlock(w, Vec2i{i32(i), i32(j)}, r, true)
+                PlaceBlock(w, {i32(i), i32(j)}, r, true)
             }else{
                 w.worldGrid[i][j] = 0
             }
@@ -517,29 +533,51 @@ world_to_screen :: proc(world_pos: [2]f32) -> [2]f32 {
     screen_y := world_pos[1] - camera.position.y
     return {screen_x, screen_y}
 }
-screen_to_world :: proc(screen_pos: [2]f32) -> [2]i32 {
+screen_to_world :: proc(screen_pos: [2]f32) -> [2]f32 {
     world_x := (screen_pos[0] / camera.zoom) + camera.position.x
     world_y := ((GAME_HEIGHT - screen_pos[1]) / camera.zoom) + camera.position.y
-    return {i32(world_x), i32(world_y)}
+    return {world_x, world_y}
 }
+screen_to_worldGrid :: proc(screen_pos: [2]f32) -> [2]i32 {
+    // Convert screen coordinate to world coordinate (pixels)
+    world_pixel := screen_to_world(screen_pos)
+    
+    // Adjust for the fact that our world positions are at the block centers.
+    // Subtract half of the BLOCK_SIZE so that the conversion aligns with grid indices.
+    adjusted_x := world_pixel[0] - (f32(BLOCK_SIZE) / 2 - BLOCK_SIZE)
+    adjusted_y := world_pixel[1] - (f32(BLOCK_SIZE) / 2 - BLOCK_SIZE)
+    
+    // Convert world pixel coordinate to grid coordinate by dividing by block size
+    grid_x := i32(adjusted_x / f32(BLOCK_SIZE))
+    grid_y := i32(adjusted_y / f32(BLOCK_SIZE))
+    
+    return {grid_x, grid_y}
+}
+
+BlocksInFrame : [dynamic]f32 = nil
 draw_world_sprite :: proc(
-    world_pos: [2]f32, 
+    world_pos: [2]f32,
     sprite: Sprite,
-    scale := Scale{1,1}, 
+    scale := Scale{1,1},
     color := Color{255, 255, 255, 1}
 ) {
     screen_pos := world_to_screen(world_pos)
+
     
-    w := i32(sprite.size[0]) * scale[0]
-    h := i32(sprite.size[1]) * scale[1]
+    u := i32(sprite.size[0]) * scale[0]
+    z := i32(sprite.size[1]) * scale[1]
     sy := i32(screen_pos[1])
     sx := i32(screen_pos[0])
-
+    
+    //BlocksInFrame = make([dynamic]f32, BLOCK_SIZE * camera.bounds.x, BLOCK_SIZE * camera.bounds.y)
+    
     // Skip if the entire bounding box is to the left, right, above, or below the screen:
-    if sx + w < 0 || sx - w > GAME_WIDTH || sy + h < 0 || sy - h > GAME_HEIGHT // fully off bottom
+    if sx + u < 0 || sx - u > GAME_WIDTH || sy + z < 0 || sy - z > GAME_HEIGHT // fully off bottom
     {
         return
     }
+
+    //append(&BlocksInFrame, f32(w.worldGrid[i32(world_pos[0])][i32(world_pos[1])]))
 
     // Otherwise, draw it:
     append(&sprites_to_render, Sprite_To_Render{
@@ -548,8 +586,8 @@ draw_world_sprite :: proc(
         scale    = scale,
         color    = color,
     })
-
 }
+
 // Frame update function
 frame_cb :: proc "c" () {
     context = runtime.default_context()
@@ -715,21 +753,20 @@ event_cb :: proc "c" (ev: ^sapp.Event) {
     if ev.type == .MOUSE_DOWN {
         mouse_pos := [2]f32{ev.mouse_x, ev.mouse_y}
         fmt.println("Mouse pos:", mouse_pos)
-        world_pos := screen_to_world(mouse_pos)
-        fmt.println("World pos:", world_pos)
-        block_x := i32(world_pos[0] / BLOCK_SIZE)
-        block_y := i32(world_pos[1] / BLOCK_SIZE)
+        grid_pos := screen_to_worldGrid(mouse_pos)
+        fmt.println("World pos:", grid_pos)
         if key_down[.LEFT_SHIFT]{
             // Check if within bounds
-            if block_x >= 0 && block_x < w.width && block_y >= 0 && block_y < w.height {
-                w.worldGrid[block_x][block_y] = int(BLOCK_AIR.Type)
-                debug_print("Block at", block_x, block_y, "set to air")
+            if grid_pos.x >= 0 && grid_pos.x < w.width && grid_pos.y >= 0 && grid_pos.y < w.height {
+                w.worldGrid[grid_pos.x][grid_pos.y] = int(BLOCK_AIR.Type)
+                PlaceBlock(&w, grid_pos, BLOCK_AIR.Type, false)
+                debug_print("Block at", grid_pos.x, grid_pos.y, "set to air")
             }
         }else if key_down[.LEFT_CONTROL]{
             // Check if within bounds
-            if block_x >= 0 && block_x < w.width && block_y >= 0 && block_y < w.height {
-                w.worldGrid[block_x][block_y] = int(BLOCK_DIRT.Type)
-                debug_print("Block at", block_x, block_y, "set to dirt")
+            if grid_pos.x >= 0 && grid_pos.x < w.width && grid_pos.y >= 0 && grid_pos.y < w.height {
+                w.worldGrid[grid_pos.x][grid_pos.y] = int(BLOCK_DIRT.Type)
+                debug_print("Block at", grid_pos.x, grid_pos.y, "set to dirt")
             }
         }
     }
