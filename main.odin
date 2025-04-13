@@ -18,6 +18,11 @@ import "shaders"
 import "core:c"
 import "core:time"
 
+// GUI
+import "vendor:imgui-odin"
+
+
+
 // Debug logging that only prints in development builds
 debug_print :: proc(args: ..any) {
     when DEBUG_MODE {
@@ -427,8 +432,6 @@ maybe_grow_grass :: proc() {
             }
         }
     }
-
-    fmt.println("Grass growth step completed")
 }
 
 renderWorld :: proc() {
